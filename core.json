@@ -1,0 +1,188 @@
+{
+  "schema_version": "1.0.0",
+  "enabled": true,
+  "info": "Musical Time Signature Compensation Logic. If disabled, the app will cease to function.",
+  "constants": {
+    "WHOLE_NOTE_BEAT_COUNT": 4,
+    "MAX_COMPENSATION_NUMERATOR": 32,
+    "EXCLUDED_COMPENSATION_NUMERATOR": 4,
+    "FALLBACK_ABSORPTION_RATES": {
+      "1": 3,
+      "2": 2,
+      "3": 1
+    }
+  },
+  "calculation_flow": {
+    "initialization": [
+      {
+        "type": "calculate_totals",
+        "outputs": ["total_beats", "total_measures", "user_denominator"]
+      },
+      {
+        "type": "calculate_ideal_m",
+        "formula": "4 * (total_measures + 1) - total_beats",
+        "output": "ideal_m"
+      }
+    ],
+    "decision_tree": {
+      "if": "total_beats == 4 * total_measures",
+      "then": {
+        "action": "self_balanced"
+      },
+      "else": {
+        "if": "ideal_m > 0 and is_integer(ideal_m)",
+        "then": {
+          "action": "primary_compensation"
+        },
+        "else": {
+          "action": "fallback_compensation"
+        }
+      }
+    }
+  },
+  "actions": {
+    "self_balanced": {
+      "result": {},
+      "fallback_used": false
+    },
+    "primary_compensation": {
+      "type": "greedy_division",
+      "dividend_var": "ideal_m",
+      "divisors": {
+        "type": "range",
+        "start": 32,
+        "end": 0,
+        "step": -1,
+        "exclude": [4]
+      },
+      "output_format": "{num}/4",
+      "fallback_used": false
+    },
+    "fallback_compensation": {
+      "type": "greedy_absorption",
+      "excess_beats_formula": "total_beats - (4 * total_measures)",
+      "absorption_rates_map": {
+        "1": 3,
+        "2": 2,
+        "3": 1
+      },
+      "output_format": "{num}/4",
+      "fallback_used": true
+    }
+  },
+  "verification_checks": [
+    {
+      "name": "Beat Conservation",
+      "target_beats_formula": {
+        "if": "fallback_used",
+        "then": "4 * (total_added_measures + total_compensation_measures)",
+        "else_if": "is_empty(compensation_result)",
+        "then": "total_added_beats",
+        "else": "4 * (total_added_measures + 1)"
+      },
+      "assertion": "actual_total_beats == target_beats",
+      "explanation": "Verifies that total beats (original + compensation) match the target structure."
+    },
+    {
+      "name": "Mathematical Constraints",
+      "assertions": [
+        "all_inputs_positive(added_groups)",
+        "all_compensation_counts_positive(compensation_result)",
+        "is_integer(final_total_beats)"
+      ],
+      "warnings": [
+        "denominators_are_power_of_two(added_groups)",
+        "denominators_are_power_of_two(compensation_result)"
+      ],
+      "explanation": "Checks for non-positive values and non-integer total beats."
+    },
+    {
+      "name": "Alternative Calculation (LCM)",
+      "target_beats_formula": {
+        "if": "fallback_used",
+        "then": "4 * (total_added_measures + total_compensation_measures)",
+        "else_if": "is_empty(compensation_result)",
+        "then": "4 * total_added_measures",
+        "else": "4 * (total_added_measures + 1)"
+      },
+      "assertion": "lcm_total_beats == target_beats",
+      "explanation": "Performs an independent check using LCM to avoid fractional math."
+    },
+    {
+      "name": "Structural Integrity",
+      "assertions": [
+        {
+          "if": "is_empty(compensation_result) and not fallback_used",
+          "then": "is_self_balanced",
+          "fail_message": "No compensation returned for an unbalanced timeline."
+        },
+        {
+          "if": "fallback_used",
+          "then": "not (ideal_m > 0 and is_integer(ideal_m))",
+          "fail_message": "Fallback used when primary compensation was possible."
+        },
+        {
+          "if": "not is_empty(compensation_result) and not fallback_used",
+          "then": "ideal_m > 0 and is_integer(ideal_m)",
+          "fail_message": "Primary logic used when its conditions were not met."
+        }
+      ],
+      "explanation": "Ensures the correct logic branch was chosen based on the timeline's state."
+    }
+  ],
+  "explanation_templates": {
+    "initial_summary": [
+      "Calculation Steps:",
+      "--------------------",
+      "Added Groups:"
+    ],
+    "group_line_item": "  Group {index}: {numerator}/{denominator} x {count} measures -> {beats} beats",
+    "totals_summary": [
+      "--------------------",
+      "Total Inserted Measures (Σkᵢ) = {total_measures}",
+      "Total Inserted Beats (S) = {total_beats}",
+      "--------------------"
+    ],
+    "fractional_warning": "\nWarning: Total beats is not a whole number. Calculations may be imprecise.",
+    "self_balanced": [
+      "\nStructural Analysis:",
+      "  Total Beats ({total_beats}) is exactly 4 times Total Measures ({total_measures}).",
+      "  The timeline is already perfectly balanced.",
+      "\nResult: No compensation is required."
+    ],
+    "primary_path": [
+      "Primary Goal: Align total beats to 4 * (Total Measures + 1)",
+      "Ideal Compensation Beats (m) Formula:",
+      "  m = 4 * (1 + Σkᵢ) - S",
+      "  m = 4 * (1 + {total_measures}) - {total_beats} = {ideal_m}",
+      "\nResult: Using ideal compensation value m = {ideal_m} (since m > 0).",
+      "This beat count will be divided into an efficient combination of measures.",
+      "Available time signatures: 1/4 to {MAX_COMPENSATION_NUMERATOR}/4 (excluding {EXCLUDED_COMPENSATION_NUMERATOR}/4)",
+      "\nDivision Calculation:"
+    ],
+    "primary_division_step": "  Using {count} measure(s) of {num}/4 (Remaining: {remaining} beats)",
+    "fallback_path_intro": "\nResult: Ideal value m ({ideal_m}) is not a positive integer, using fallback logic.",
+    "fallback_path_goal": [
+      "\nFallback Goal: Insert additional measures to align the entire timeline to a \"Total Beats = 4 * Total Measures\" structure.",
+      "\nExcess Beat Calculation (based on 4/4 time):",
+      "  Excess Beats = S - 4*Σkᵢ = {total_beats} - 4*{total_measures} = {excess_beats}"
+    ],
+    "fallback_no_excess": "\nNo additional measures are needed as there are no excess beats.",
+    "fallback_deficient": "\nWarning: Timeline is deficient but does not meet primary goal conditions.",
+    "fallback_absorption_info": [
+      "This excess will be absorbed by the fewest possible additional measures.",
+      "Priority is given to signatures that absorb more beats (i.e., have a larger difference from 4/4 time)."
+    ],
+    "fallback_absorption_rate_line": "  - Adding one {num}/4 measure absorbs {absorb} beats (4-{num}={absorb}).",
+    "fallback_suggestion_header": "\nSuggestion Calculation:",
+    "fallback_suggestion_step": "  Number of {num}/4 measures (absorbs {absorb_rate} beats): {count}",
+    "fallback_verification": [
+      "\nVerification:",
+      "  Suggested additional measures: {suggestion}",
+      "  Added Beats S_add = {s_add}, Added Measures k_add = {k_add}",
+      "  New Total Beats S_new = {s_new}, New Total Measures k_new = {k_new}",
+      "  Target Beats = 4 * k_new = {target_beats}",
+      "  {verification_message}"
+    ]
+  }
+}
